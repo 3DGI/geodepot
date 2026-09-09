@@ -1,4 +1,5 @@
 import json
+from hashlib import sha256
 import tarfile
 from pathlib import Path
 from shutil import rmtree
@@ -20,7 +21,6 @@ def test_pull_downloads_and_extracts_data_from_docker_ssh(
     _reset_server_repo(server_repo)
     _seed_server_data_archive(
         server_repo=server_repo,
-        source_index=data_dir / "mock_project" / ".geodepot" / "index.geojson",
         source_data=data_dir / "sources" / "wippolder" / "wippolder.gpkg",
         case_name="wippolder",
         data_name="wippolder.gpkg",
@@ -100,7 +100,6 @@ def _reset_server_repo(server_repo: Path) -> None:
 
 def _seed_server_data_archive(
     server_repo: Path,
-    source_index: Path,
     source_data: Path,
     case_name: str,
     data_name: str,
@@ -113,11 +112,37 @@ def _seed_server_data_archive(
     with tarfile.TarFile(archive, mode="w") as tf:
         tf.add(source_data, arcname=data_name, recursive=False)
 
-    index_data = json.loads(source_index.read_text())
-    index_data["features"] = [
-        feature
-        for feature in index_data["features"]
-        if feature["properties"]["case_name"] == case_name
-        and feature["properties"]["data_name"] == data_name
-    ]
+    content = source_data.read_bytes()
+    archive_bytes = archive.read_bytes()
+    index_data = {
+        "type": "FeatureCollection",
+        "name": "index",
+        "crs": {
+            "type": "name",
+            "properties": {"name": "urn:ogc:def:crs:EPSG::3857"},
+        },
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {
+                    "fid": 0,
+                    "case_name": case_name,
+                    "case_description": None,
+                    "data_name": data_name,
+                    "data_sha256": sha256(content).hexdigest(),
+                    "data_size": len(content),
+                    "archive_sha256": sha256(archive_bytes).hexdigest(),
+                    "archive_size": len(archive_bytes),
+                    "data_description": None,
+                    "data_format": "GPKG",
+                    "data_driver": "OGR",
+                    "data_changed_by": None,
+                    "data_license": None,
+                    "data_srs": None,
+                    "data_extent_original_srs": None,
+                },
+                "geometry": None,
+            }
+        ],
+    }
     (server_repo / "index.geojson").write_text(json.dumps(index_data))

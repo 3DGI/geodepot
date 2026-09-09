@@ -83,7 +83,7 @@ After a while, _UserA_ decides to push her changes and Geodepot reports that the
 
 - _description_, because _UserB_ changed it,
 - _extent_, because _UserB_ pushed a version which still contained the objects that _UserA_ removed,
-- _sha1_, because the file itself has changed
+- _sha256_, because the file itself has changed
 - _changed_by_ shows _UserB_, because he made the last change on the version that is on the _Server_.
 
 At this point, _UserA_ and _UserB_ need to agree on a common version for `wippolder/wippolder.gpkg`, push it to the _Server_ and update their local versions with it.

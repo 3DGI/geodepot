@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 from enum import Enum, auto
-from hashlib import file_digest
+from hashlib import sha256
 from json import dumps, load
 from logging import getLogger
 from pathlib import Path
+from stat import S_ISDIR, S_ISREG
 from typing import NewType, Self
 
 from geodepot import GEODEPOT_INDEX_EPSG
@@ -79,7 +80,10 @@ class Data:
     format: str | None = None
     description: str | None = None
     changed_by: User | None = None
-    sha1: str | None = None
+    sha256: str | None = None
+    data_size: int | None = None
+    archive_sha256: str | None = None
+    archive_size: int | None = None
     driver: Drivers | None = None
     bbox: BBoxSRS | None = None
 
@@ -105,12 +109,18 @@ class Data:
         self.format = data_format
         self.description = description
         self.changed_by = changed_by
-        self.sha1 = None
+        self.sha256 = None
+        self.data_size = None
+        self.archive_sha256 = None
+        self.archive_size = None
         self.driver = None
         self.bbox = None
+        if path.exists() and not (path.is_file() or path.is_dir()):
+            raise GeodepotDataError(f"Data must be a regular file or directory: {path}")
+        if path.is_file() or path.is_dir():
+            logger.debug("Computing SHA-256 content digest for %s", path)
+            self.sha256, self.data_size = self.compute_content_hash_and_size(path)
         if path.is_file():
-            logger.debug("Computing sha1 for %s", path)
-            self.sha1 = self._compute_sha1(path)
             if data_format is None:
                 logger.debug("Inferring format for %s", path)
                 self.driver, self.format = self._infer_format(path)
@@ -129,12 +139,46 @@ class Data:
                 )
 
     @staticmethod
-    def _compute_sha1(path: Path) -> str:
-        logger.debug("Reading bytes for sha1 digest: %s", path)
-        with path.open("rb") as f:
-            digest = file_digest(f, "sha1").hexdigest()
-        logger.debug("Computed sha1 for %s", path)
-        return digest
+    def compute_content_hash_and_size(path: Path) -> tuple[str, int]:
+        """Return the corpus SHA-256 digest and byte size for a file or directory."""
+        if path.is_symlink():
+            raise GeodepotDataError(f"Symlinks are not supported as data: {path}")
+        if path.is_file():
+            digest = sha256()
+            size = 0
+            with path.open("rb") as source:
+                for block in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(block)
+                    size += len(block)
+            return digest.hexdigest(), size
+        if not path.is_dir():
+            raise GeodepotDataError(f"Data must be a regular file or directory: {path}")
+
+        files: list[Path] = []
+        for entry in path.rglob("*"):
+            status = entry.lstat()
+            if entry.is_symlink() or not (
+                S_ISDIR(status.st_mode) or S_ISREG(status.st_mode)
+            ):
+                raise GeodepotDataError(
+                    f"Directories may contain only regular files and directories: {entry}"
+                )
+            if entry.is_file():
+                files.append(entry)
+
+        digest = sha256()
+        size = 0
+        for entry in sorted(files, key=lambda item: item.relative_to(path).as_posix()):
+            relative_path = entry.relative_to(path).as_posix().encode("utf-8")
+            file_size = entry.stat().st_size
+            digest.update(len(relative_path).to_bytes(8, "big"))
+            digest.update(relative_path)
+            digest.update(file_size.to_bytes(8, "big"))
+            with entry.open("rb") as source:
+                for block in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(block)
+            size += file_size
+        return digest.hexdigest(), size
 
     @staticmethod
     def _infer_format(path: Path) -> tuple[Drivers, str]:
@@ -332,7 +376,27 @@ class Data:
         df = cls.__new__(cls)
         logger.debug("Deserializing data feature: %s", feature["data_name"])
         df.name = DataName(feature["data_name"])
-        df.sha1 = feature["data_sha1"]
+        df.sha256 = feature["data_sha256"]
+        df.data_size = feature["data_size"]
+        df.archive_sha256 = feature["archive_sha256"]
+        df.archive_size = feature["archive_size"]
+        if (
+            not isinstance(df.sha256, str)
+            or len(df.sha256) != 64
+            or any(character not in "0123456789abcdef" for character in df.sha256)
+            or not isinstance(df.archive_sha256, str)
+            or len(df.archive_sha256) != 64
+            or any(
+                character not in "0123456789abcdef" for character in df.archive_sha256
+            )
+            or not isinstance(df.data_size, int)
+            or not isinstance(df.archive_size, int)
+            or df.data_size < 0
+            or df.archive_size < 0
+        ):
+            raise GeodepotDataError(
+                "Index data item has incomplete SHA-256 integrity metadata"
+            )
         df.description = feature["data_description"]
         df.format = feature["data_format"]
         df.driver = feature["data_driver"]
@@ -377,7 +441,10 @@ class Data:
             f"\nformat={self.format}",
             f"driver={self.driver}",
             f"license={self.license}",
-            f"sha1={self.sha1}",
+            f"sha256={self.sha256}",
+            f"data_size={self.data_size}",
+            f"archive_sha256={self.archive_sha256}",
+            f"archive_size={self.archive_size}",
             f"changed_by={self.changed_by.to_pretty() if self.changed_by is not None else None}",
             f"extent={bbox_wkt}",
             f"srs={srs_wkt}",

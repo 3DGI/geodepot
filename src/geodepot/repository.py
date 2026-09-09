@@ -1,6 +1,7 @@
 import os
 import shlex
 import tarfile
+from tempfile import TemporaryDirectory
 from dataclasses import dataclass, field, fields
 from enum import Enum, auto
 from itertools import groupby
@@ -222,10 +223,12 @@ class Index:
             INDEX_FIELD_DEFINITIONS = (
                 FieldDefn("fid", OFTInteger64),
                 FieldDefn("case_name", OFTString),
-                FieldDefn("case_sha1", OFTString),
                 FieldDefn("case_description", OFTString),
                 FieldDefn("data_name", OFTString),
-                FieldDefn("data_sha1", OFTString),
+                FieldDefn("data_sha256", OFTString),
+                FieldDefn("data_size", OFTInteger64),
+                FieldDefn("archive_sha256", OFTString),
+                FieldDefn("archive_size", OFTInteger64),
                 FieldDefn("data_description", OFTString),
                 FieldDefn("data_format", OFTString),
                 FieldDefn("data_driver", OFTString),
@@ -253,10 +256,21 @@ class Index:
                         feat = Feature(defn)
                         feat["fid"] = fid
                         feat["case_name"] = case_name
-                        feat["case_sha1"] = case.sha1
                         feat["case_description"] = case.description
                         feat["data_name"] = data.name
-                        feat["data_sha1"] = data.sha1
+                        if (
+                            data.sha256 is None
+                            or data.data_size is None
+                            or data.archive_sha256 is None
+                            or data.archive_size is None
+                        ):
+                            raise GeodepotIndexError(
+                                f"Data item {case_name}/{data.name} has incomplete integrity metadata"
+                            )
+                        feat["data_sha256"] = data.sha256
+                        feat["data_size"] = data.data_size
+                        feat["archive_sha256"] = data.archive_sha256
+                        feat["archive_size"] = data.archive_size
                         feat["data_description"] = data.description
                         feat["data_format"] = data.format
                         feat["data_driver"] = data.driver
@@ -313,7 +327,6 @@ class Index:
                         case_name,
                         Case(
                             name=CaseName(feat["case_name"]),
-                            sha1=feat["case_sha1"],
                             description=feat["case_description"],
                         ),
                     )
@@ -642,6 +655,9 @@ class Repository:
                 path_archive = self._compress_data(destination)
                 if path_archive.exists():
                     logger.debug("Compressed %s into %s", destination, path_archive)
+                    data.archive_sha256, data.archive_size = (
+                        Data.compute_content_hash_and_size(path_archive)
+                    )
                     if destination.is_file():
                         destination.unlink()
                     else:
@@ -701,7 +717,7 @@ class Repository:
         If the data file does not exist locally, and a remote is configured, that
         contains the file, then it will be downloaded.
         """
-        if (_ := self.get_data(casespec)) is not None:
+        if (data := self.get_data(casespec)) is not None:
             data_path = self.path_cases.joinpath(casespec.to_path())
             logger.debug("Resolving data path for %s at %s", casespec, data_path)
             if data_path.exists():
@@ -753,13 +769,23 @@ class Repository:
                     logger.debug(
                         "Found archive for %s at %s, decompressing", casespec, archive
                     )
+                    self._verify_archive(casespec, data, archive)
                     self._decompress_data(archive, casespec)
                     if data_path.exists():
-                        return data_path
-                    else:
-                        logger.error(
-                            f"Failed to decompress data file {data_path} from {archive}"
+                        content_sha256, content_size = (
+                            Data.compute_content_hash_and_size(data_path)
                         )
+                        if (content_sha256, content_size) == (
+                            data.sha256,
+                            data.data_size,
+                        ):
+                            return data_path
+                        raise GeodepotInvalidRepository(
+                            f"Content integrity check failed for {casespec}"
+                        )
+                    logger.error(
+                        f"Failed to decompress data file {data_path} from {archive}"
+                    )
         logger.info(f"The entry {casespec} does not exist in the repository.")
         return None
 
@@ -1244,6 +1270,67 @@ class Repository:
         """Serialize the index."""
         logger.debug("Writing index to %s", self.path_index)
         self.index.write(self.path_index)
+
+    def _verify_archive(self, casespec: CaseSpec, data: Data, archive: Path) -> None:
+        archive_sha256, archive_size = Data.compute_content_hash_and_size(archive)
+        if (archive_sha256, archive_size) != (data.archive_sha256, data.archive_size):
+            raise GeodepotInvalidRepository(
+                f"Archive integrity check failed for {casespec}"
+            )
+
+    def check(self) -> None:
+        """Verify every indexed payload and its canonical archive."""
+        self.load_index()
+        self._validate_archive_layout()
+        for case_name, case in self.index.cases.items():
+            for data_name, data in case.data.items():
+                casespec = CaseSpec(case_name, data_name)
+                archive = _local_data_archive_path(self.path_cases, casespec)
+                if not archive.is_file():
+                    raise GeodepotInvalidRepository(
+                        f"Missing archive for {casespec}: {archive}"
+                    )
+                archive_sha256, archive_size = Data.compute_content_hash_and_size(
+                    archive
+                )
+                if (archive_sha256, archive_size) != (
+                    data.archive_sha256,
+                    data.archive_size,
+                ):
+                    raise GeodepotInvalidRepository(
+                        f"Archive integrity check failed for {casespec}"
+                    )
+                with TemporaryDirectory() as temporary_directory:
+                    extraction_root = Path(temporary_directory)
+                    try:
+                        with TarFile(archive, mode="r") as tar:
+                            members = tar.getmembers()
+                            expected_member = str(data_name)
+                            if not members or any(
+                                member.name != expected_member
+                                and not member.name.startswith(f"{expected_member}/")
+                                for member in members
+                            ):
+                                raise GeodepotInvalidRepository(
+                                    f"Archive layout check failed for {casespec}"
+                                )
+                            tar.extractall(extraction_root, filter="data")
+                    except (tarfile.TarError, OSError) as error:
+                        raise GeodepotInvalidRepository(
+                            f"Cannot extract archive for {casespec}"
+                        ) from error
+                    extracted = extraction_root / data_name
+                    if not extracted.exists():
+                        raise GeodepotInvalidRepository(
+                            f"Archive did not contain data for {casespec}"
+                        )
+                    content_sha256, content_size = Data.compute_content_hash_and_size(
+                        extracted
+                    )
+                    if (content_sha256, content_size) != (data.sha256, data.data_size):
+                        raise GeodepotInvalidRepository(
+                            f"Content integrity check failed for {casespec}"
+                        )
 
     def _compress_data(self, path: Path) -> Path:
         """Compresses a data item in the repository."""

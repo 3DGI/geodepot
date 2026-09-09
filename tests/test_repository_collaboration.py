@@ -38,7 +38,6 @@ def case_wippolder(user_local) -> Case:
     return Case(
         name=CaseName("wippolder"),
         description=None,
-        sha1=None,
         data=dict(),
         changed_by=user_local,
     )
@@ -53,7 +52,10 @@ def data_wippolder_gpkg(user_local) -> Data:
     df.driver = Drivers.OGR
     df.format = "GPKG"
     df.license = "CC-0"
-    df.sha1 = "b1ec6506eb7858b0667281580c4f5a5aff6894b2"
+    df.sha256 = "0" * 64
+    df.data_size = 1
+    df.archive_sha256 = "1" * 64
+    df.archive_size = 2
     df.bbox = BBoxSRS(
         bbox_epsg_3857=BBox(
             minx=486674.52386715333,
@@ -78,7 +80,10 @@ def data_wippolder_gpkg_modified(user_remote) -> Data:
     df.driver = Drivers.OGR
     df.format = "GPKG"
     df.license = None
-    df.sha1 = "ed8b3ccbaf14970a402efd68f7bfa7db20a2543a"
+    df.sha256 = "2" * 64
+    df.data_size = 1
+    df.archive_sha256 = "3" * 64
+    df.archive_size = 2
     df.bbox = BBoxSRS(
         bbox_epsg_3857=BBox(
             minx=486698.6792049131,
@@ -103,7 +108,10 @@ def data_wippolder_las(user_local) -> Data:
     df.driver = Drivers.PDAL
     df.format = "las"
     df.license = "CC-0"
-    df.sha1 = "d22feced58136b7052caa73d1676ced45041e7b9"
+    df.sha256 = "4" * 64
+    df.data_size = 1
+    df.archive_sha256 = "5" * 64
+    df.archive_size = 2
     df.bbox = BBoxSRS(
         bbox_epsg_3857=None,
         bbox_original_srs=BBox(
@@ -212,14 +220,14 @@ def test_modify_data(
     (index_local := Index()).add_case(case_local)
     (index_remote := Index()).add_case(case_remote)
     diff_all = index_local.diff(index_remote)
-    # There are 3 differences, not 4, because the 'changed_by' is reported separately
-    assert len(diff_all) == 3
+    # There are 4 differences, including archive integrity metadata, because the 'changed_by' is reported separately
+    assert len(diff_all) == 4
     for d in diff_all:
         assert d.changed_by_other == user_remote
         assert d.status == Status.MODIFY
     # Modified by local
     diff_all = index_remote.diff(index_local)
-    assert len(diff_all) == 3
+    assert len(diff_all) == 4
     for d in diff_all:
         assert d.changed_by_other == user_local
         assert d.status == Status.MODIFY

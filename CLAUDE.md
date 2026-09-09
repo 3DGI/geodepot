@@ -101,7 +101,7 @@ The test server provides:
 
 ### Data Handling (`data.py`)
 
-- **Metadata**: `Data` dataclass stores name, format, driver, sha1, bbox, license, description, and changed_by user
+- **Metadata**: `Data` dataclass stores name, format, driver, sha256, bbox, license, description, and changed_by user
 - **Format detection**: Automatic probing in order: CityJSON (by extension) → OGR (vector) → GDAL (raster) → PDAL (point cloud)
   - Probes file extension and attempts driver-specific reads
   - Override with `--format` flag when auto-detection fails or is incorrect
@@ -110,7 +110,7 @@ The test server provides:
 
 ### Case (`case.py`)
 
-- **Structure**: `Case` dataclass holds name, description, sha1, dict of `Data` items, and `changed_by` user
+- **Structure**: `Case` dataclass holds name, description, sha256, dict of `Data` items, and `changed_by` user
 - **Identification**: `CaseSpec` represents `case_name` or `case_name/data_name`; parsed from standard `case/data` strings
 - Each case is a directory under `.geodepot/cases/`
 

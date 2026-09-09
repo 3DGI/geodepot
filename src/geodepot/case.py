@@ -66,7 +66,6 @@ class Case:
 
     name: CaseName
     description: str | None
-    sha1: str | None = None
     data: dict[DataName, Data] = field(default_factory=dict)
     changed_by: User | None = None
 
@@ -133,17 +132,15 @@ class Case:
 
     def to_pretty(self) -> str:
         logger.debug(
-            "Serializing case %s for display data_items=%d sha1_set=%s changed_by_set=%s",
+            "Serializing case %s for display data_items=%d changed_by_set=%s",
             self.name,
             len(self.data),
-            self.sha1 is not None,
             self.changed_by is not None,
         )
         output = [
             f"NAME={self.name}",
             f"\nDESCRIPTION={self.description}",
             f"\nnr_data_items={len(self.data)}",
-            f"sha1={self.sha1}",
             f"changed_by={self.changed_by.to_pretty()}",
         ]
         return "\n".join(output)

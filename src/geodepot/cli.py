@@ -188,6 +188,17 @@ def get_cmd(ctx, casespec):
     print(data_path)
 
 
+@command(name="check", help="Verify indexed content and archive integrity.")
+@pass_context
+def check_cmd(ctx):
+    repo = get_repository(ctx)
+    try:
+        repo.check()
+    except GeodepotInvalidRepository as error:
+        ctx.obj["logger"].error(str(error))
+        ctx.exit(1)
+
+
 @command(
     name="init",
     help="Initialise a Geodepot repository in the current directory. With a URL to a remote repository as an argument, download the remote repository except its data, to make it available in the current working directory.",
@@ -357,6 +368,7 @@ geodepot_grp.add_command(add_cmd)
 geodepot_grp.add_command(config_grp)
 geodepot_grp.add_command(fetch_cmd)
 geodepot_grp.add_command(get_cmd)
+geodepot_grp.add_command(check_cmd)
 geodepot_grp.add_command(init_cmd)
 geodepot_grp.add_command(list_cmd)
 geodepot_grp.add_command(pull_cmd)

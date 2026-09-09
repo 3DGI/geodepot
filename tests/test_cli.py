@@ -88,7 +88,9 @@ def test_cli_verbose_enables_debug_logs(
     assert any("CLI invoked" in message for message in debug_messages)
     assert any("Initializing repository" in message for message in debug_messages)
     assert any("Adding entry" in message for message in debug_messages)
-    assert any("Computing sha1" in message for message in debug_messages)
+    assert any(
+        "Computing SHA-256 content digest" in message for message in debug_messages
+    )
     assert any("Attached data" in message for message in debug_messages)
 
 

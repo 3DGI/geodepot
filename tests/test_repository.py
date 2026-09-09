@@ -7,7 +7,11 @@ from geodepot.repository import Repository, Index, IndexDiff, Status
 from geodepot.case import Case, CaseSpec, CaseName
 from geodepot.data import Data, DataName
 from geodepot.config import RemoteName
-from geodepot.errors import GeodepotIndexError, GeodepotRuntimeError
+from geodepot.errors import (
+    GeodepotIndexError,
+    GeodepotInvalidRepository,
+    GeodepotRuntimeError,
+)
 from geodepot.errors import GeodepotSyncError
 
 
@@ -49,15 +53,11 @@ def test_empty(repo):
     assert repo.path.exists()
 
 
-def test_init_from_url(mock_temp_project):
-    repo = Repository(
-        path="https://data.3dgi.xyz/geodepot-test-data/mock_project/.geodepot"
-    )
-    assert repo.path.exists()
-    assert repo.path_index.exists()
-    assert repo.path_cases.exists()
-    assert repo.path_config_local.exists()
-    assert repo.get_case(CaseSpec(case_name="wippolder", data_name=None)) is not None
+def test_init_from_url_rejects_sha1_index(mock_temp_project):
+    with pytest.raises(GeodepotInvalidRepository):
+        Repository(
+            path="https://data.3dgi.xyz/geodepot-test-data/mock_project/.geodepot"
+        )
 
 
 def test_index_serialize(repo, wippolder_dir):
@@ -72,19 +72,19 @@ def test_index_serialize(repo, wippolder_dir):
     assert repo.path.joinpath("index.geojson").exists()
 
 
-def test_index_load(data_dir):
-    """Can we deserialize the index?"""
-    index = Index.load(data_dir / "test_index.geojson")
+def test_index_load(repo, wippolder_dir):
+    """Can we deserialize a SHA-256 index written by Geodepot?"""
+    repo.add("wippolder", pathspec=str(wippolder_dir / "wippolder.gpkg"))
+    index = Index.load(repo.path_index)
     assert CaseName("wippolder") in index.cases
 
 
-def test_index_load_remote(repo):
+def test_index_load_remote_rejects_sha1_index(repo):
     repo.config.add_remote(
         "origin", "https://data.3dgi.xyz/geodepot-test-data/mock_project/.geodepot"
     )
-    repo.load_index(remote=RemoteName("origin"))
-    assert repo.index_remote is not None
-    assert CaseName("wippolder") in repo.index_remote.cases
+    with pytest.raises(GeodepotRuntimeError):
+        repo.load_index(remote=RemoteName("origin"))
 
 
 def test_add_files(repo, wippolder_dir):
@@ -128,6 +128,36 @@ def test_add_directory_as_data(repo, wippolder_dir):
     assert len(case_wippolder.data) == 1
 
 
+def test_directory_data_integrity_and_check(repo, tmp_path):
+    """Directory payloads use the corpus digest and preserve one top-level member."""
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    (payload / "b.txt").write_bytes(b"second")
+    nested = payload / "nested"
+    nested.mkdir()
+    (nested / "a.txt").write_bytes(b"first")
+
+    repo.add("cityjson/payload", pathspec=str(payload), as_data=True)
+    data = repo.get_data(CaseSpec("cityjson", "payload"))
+    assert data.data_size == len(b"secondfirst")
+    assert len(data.sha256) == 64
+    assert len(data.archive_sha256) == 64
+    archive = repo.path_cases / "cityjson" / "payload.tar"
+    assert archive.stat().st_size == data.archive_size
+    repo.check()
+
+
+def test_check_rejects_corrupt_archive(repo, tmp_path):
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    (payload / "content.txt").write_text("content", encoding="utf-8")
+    repo.add("cityjson/payload", pathspec=str(payload), as_data=True)
+    archive = repo.path_cases / "cityjson" / "payload.tar"
+    archive.write_bytes(b"corrupt")
+    with pytest.raises(GeodepotInvalidRepository, match="Archive integrity"):
+        repo.check()
+
+
 def test_update_data(repo, wippolder_dir):
     """Can we update a single data entry, renaming the input file in the process?"""
     repo.add("wippolder", pathspec=str(wippolder_dir / "wippolder.gpkg"))
@@ -137,8 +167,14 @@ def test_update_data(repo, wippolder_dir):
         pathspec=str(wippolder_dir / "wippolder_changed.gpkg"),
     )
     df_updated = repo.get_data(CaseSpec("wippolder", "wippolder.gpkg"))
-    assert df_old.sha1 == "b1ec6506eb7858b0667281580c4f5a5aff6894b2"
-    assert df_updated.sha1 == "ed8b3ccbaf14970a402efd68f7bfa7db20a2543a"
+    assert (
+        df_old.sha256
+        == "3e278092c1167c8e8b40fce0fcb97bc646ed8113e7a0bf3d5f4e940837b05a48"
+    )
+    assert (
+        df_updated.sha256
+        == "022a1168176c35b5d495833999c5aef1efec947985fc2ff8f7c8f4e1aa719187"
+    )
 
 
 def test_add_description_data(repo, wippolder_dir):
@@ -173,20 +209,18 @@ def test_add_license_data(repo, wippolder_dir):
     assert df_updated.license == "CC-0"
 
 
-def test_get_local(mock_project_dir):
-    """Can we retrieve the local path of a data item?"""
-    repo = Repository()
-    p = repo.get_data_path(CaseSpec("wippolder", "wippolder.gpkg"))
-    assert p.exists()
-
-
-def test_get_remote(mock_temp_project):
-    """Can we get a data item from the remote repository?"""
-    repo = Repository(
-        path="https://data.3dgi.xyz/geodepot-test-data/mock_project/.geodepot"
-    )
+def test_get_local(repo, wippolder_dir):
+    """Can we retrieve a local data item extracted from its canonical archive?"""
+    repo.add("wippolder", pathspec=str(wippolder_dir / "wippolder.gpkg"))
     data_path = repo.get_data_path(CaseSpec("wippolder", "wippolder.gpkg"))
     assert data_path.exists()
+
+
+def test_get_remote_rejects_sha1_index(mock_temp_project):
+    with pytest.raises(GeodepotInvalidRepository):
+        Repository(
+            path="https://data.3dgi.xyz/geodepot-test-data/mock_project/.geodepot"
+        )
 
 
 def test_index_load_missing_raises(tmp_path):

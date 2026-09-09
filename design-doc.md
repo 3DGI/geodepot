@@ -496,10 +496,10 @@ For each *data file*, the INDEX stores:
 | id               | uint    | Auto-generated, sequential data identifier.                                                       |
 | case_id          | string  | User provided case identifier. Must be unique, contain only alphanumeric characters and/or `-,_`. |
 | case_description | string  | User provided case description. Long text, can be multiline. Maybe contain markdown?              |
-| case_sha1        | string  | SHA-1 hash of the zip-compressed case.                                                            |
+| case metadata        | string  | SHA-256 hash of the zip-compressed case.                                                            |
 | case_changed_by  | string  | The user that made the last change to the case.                                                   |
 | file_name        | string  | Data file name, including extensions.                                                             |
-| file_sha1        | string  | SHA-1 hash of the data file.                                                                      |
+| data_sha256        | string  | SHA-256 hash of the data file.                                                                      |
 | file_format      | string  | Data format.                                                                                      |
 | file_license     | string  | User provided license abbreviation or link to a license.                                          |
 | bbox             | Polygon | The bounding polygon of the data file extent.                                                     |
@@ -627,7 +627,7 @@ User issues `push <case-id>`, then:
 1. Check if the remote is locked. If not, then continue.
 2. Place a LOCK on the remote, with information on who owns the lock. This prevents that the remote is updated by someone else, while the User uploads the changes.
 3. Compress the changed case into a temp directory/file.
-4. Compute SHA-1 of zip file.
+4. Compute SHA-256 of zip file.
 5. Compare the case's local data hash in the INDEX with the remote data hash in the INDEX. Maybe compare the whole INDEX? Because not on the data files can change, but also the description, license.
 6. If there is no difference, that means that the remote hasn't changed since the local changes were made and it is safe to overwrite the remote with the local changes.
 7. Overwrite the case's hash in remote INDEX with the hash of the new zipped case on the local.
@@ -651,7 +651,7 @@ User issues `push <case-id>`, then:
 1. Check if the remote is locked. If not, then continue.
 2. Place a LOCK on the remote, with information on who owns the lock. This prevents that the remote is updated by someone else, while the User uploads the changes.
 3. Compress the changed case into a temp directory/file.
-4. Compute SHA-1 of zip file.
+4. Compute SHA-256 of zip file.
 5. Compare the case's local INDEX hash with the remote INDEX hash.
 6. If there is a difference, that means that the remote has changed since the last pull. This situation cannot be resolved automatically, because geodepot cannot merge data files. The `push` stops and
    displays who made the last change, the path to the new temp-archive and tells to User to contact the last-changer to resolve the conflict.
